@@ -20,19 +20,9 @@
 
 ---
 
-## 📸 Screenshots & Demo Video
+## 📸 Mission Control Interface
 
-> **Note to self:** Replace these placeholders with your actual project assets.
-
-### 🎥 Live Demo Video
-[![Watch the video](https://img.youtube.com/vi/YOUR_YOUTUBE_VIDEO_ID_HERE/maxresdefault.jpg)](https://youtu.be/YOUR_YOUTUBE_VIDEO_ID_HERE)
-*Click the image above to watch the full demo.*
-
-### 🖥️ Mission Control UI
-![Mission Control UI](https://via.placeholder.com/1000x600/020408/00f0ff?text=ResumeForge+AI+Cyberpunk+UI)
-
-### 📄 Generated LaTeX Resume Payload
-![LaTeX Output](https://via.placeholder.com/1000x600/020408/00ff6a?text=Generated+ATS-Optimized+LaTeX+Code)
+![Mission Control UI](screenshot.png)
 
 ---
 
