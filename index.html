@@ -1,0 +1,281 @@
+<!DOCTYPE html>
+<html lang="en">
+<head>
+  <meta charset="UTF-8">
+  <meta name="viewport" content="width=device-width, initial-scale=1.0">
+  <title>ResumeForge AI — Mission Control</title>
+  <meta name="description" content="AI-powered resume generator — paste a JD, deploy your perfect ATS LaTeX resume.">
+  <meta name="theme-color" content="#020408">
+  <link rel="icon" href="data:image/svg+xml,<svg xmlns='http://www.w3.org/2000/svg' viewBox='0 0 100 100'><text y='.9em' font-size='90'>⚡</text></svg>">
+  <link rel="stylesheet" href="index.css">
+</head>
+<body>
+
+  <!-- Scanline Overlay -->
+  <div class="scanlines"></div>
+
+  <div class="app-container">
+
+    <!-- ═══ HUD Top Bar ═══ -->
+    <header class="hud-top-bar animate-in">
+      <div class="hud-logo">
+        <div class="logo-hex">⚡</div>
+        <div>
+          <div class="logo-text">ResumeForge</div>
+          <div class="logo-sub">Mission Control v3.0</div>
+        </div>
+      </div>
+      <div class="hud-status">
+        <div class="status-item">
+          <div class="status-dot"></div>
+          <span class="status-label">SYS</span>
+          <span class="status-value">ONLINE</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">AI</span>
+          <span class="status-value" style="color: var(--neon-cyan);">GEMINI</span>
+        </div>
+        <div class="status-item">
+          <span class="status-label">MODE</span>
+          <span class="status-value" style="color: var(--neon-yellow);">ATS</span>
+        </div>
+      </div>
+    </header>
+
+    <!-- ═══ Player Card ═══ -->
+    <div class="player-card animate-in">
+      <div class="player-avatar">MM</div>
+      <div class="player-info">
+        <div class="player-name">Manas Mishra</div>
+        <div class="player-class">AI/ML Engineer · B.Tech AI&ML · Jain University</div>
+        <div class="player-xp-bar">
+          <div class="player-xp-fill"></div>
+        </div>
+      </div>
+      <div class="player-level">
+        <span>LV</span>
+        <span>6</span>
+        PROJECTS
+      </div>
+    </div>
+
+    <!-- ═══ Main Grid ═══ -->
+    <main class="main-grid">
+
+      <!-- ── Left: Mission Input ── -->
+      <section class="hud-panel animate-in" aria-label="Mission Input">
+        <div class="panel-corner-br"></div>
+        <div class="panel-header">
+          <div class="panel-icon">📡</div>
+          <div>
+            <h2 class="panel-title">Mission Brief</h2>
+            <p class="panel-subtitle">Upload target JD</p>
+          </div>
+        </div>
+
+        <textarea
+          id="jd-input"
+          class="jd-textarea"
+          placeholder="// PASTE TARGET JOB DESCRIPTION HERE
+
+> Example:
+> We are seeking a Machine Learning Engineer
+> to design and implement ML models, build
+> data pipelines, and deploy scalable AI...
+
+// Press Ctrl+Enter to execute"
+          aria-label="Job Description input"
+          spellcheck="false"
+        ></textarea>
+
+        <div class="textarea-footer">
+          <span id="char-count" class="char-count">0000 CHARS</span>
+          <span class="char-count">MIN 50</span>
+        </div>
+
+        <button id="btn-generate" class="btn-generate" type="button">
+          <span class="btn-icon">▶</span>
+          <span class="btn-text">Execute Mission</span>
+        </button>
+      </section>
+
+      <!-- ── Right: Output Panel ── -->
+      <section id="output-panel" class="output-panel animate-in" aria-label="Mission Output">
+
+        <!-- Empty State -->
+        <div id="empty-state" class="hud-panel">
+          <div class="panel-corner-br"></div>
+          <div class="empty-state">
+            <div class="empty-state-icon">🎯</div>
+            <p class="empty-state-text">
+              Awaiting mission brief.<br>
+              Paste a target JD and execute to deploy your tailored resume.
+            </p>
+          </div>
+        </div>
+
+        <!-- ATS Score (Power Level) -->
+        <div id="ats-card" class="output-card ats-score-bar">
+          <div class="ats-ring">
+            <svg width="60" height="60" viewBox="0 0 56 56">
+              <defs>
+                <linearGradient id="ats-gradient" x1="0%" y1="0%" x2="100%" y2="100%">
+                  <stop offset="0%" stop-color="#00f0ff"/>
+                  <stop offset="100%" stop-color="#00ff6a"/>
+                </linearGradient>
+              </defs>
+              <circle class="ats-ring-bg" cx="28" cy="28" r="25"/>
+              <circle id="ats-ring-progress" class="ats-ring-progress" cx="28" cy="28" r="25"/>
+            </svg>
+            <div id="ats-value" class="ats-ring-value">0%</div>
+          </div>
+          <div class="ats-info">
+            <h3 id="ats-title">⚡ Power Level</h3>
+            <p id="ats-feedback">ATS match analysis pending</p>
+          </div>
+        </div>
+
+        <!-- JD Analysis Card (JD Intelligence) -->
+        <div id="jd-analysis-card" class="output-card hud-panel">
+          <div class="panel-corner-br"></div>
+          <div class="panel-header">
+            <div class="panel-icon">👁️‍c</div>
+            <div>
+              <h2 class="panel-title">JD Intelligence</h2>
+              <p class="panel-subtitle">Extracted keywords & target role</p>
+            </div>
+          </div>
+          <div class="jd-analysis-content">
+            <div class="analysis-section">
+              <span class="analysis-label">Target Role:</span>
+              <span id="jd-target-role" class="role-value">Analyzing...</span>
+            </div>
+            <div class="analysis-section">
+              <span class="analysis-label">Required Technologies:</span>
+              <div id="jd-required-tech" class="tech-tags-container"></div>
+            </div>
+            <div class="analysis-section">
+              <span class="analysis-label">Preferred Technologies:</span>
+              <div id="jd-preferred-tech" class="tech-tags-container"></div>
+            </div>
+            <div class="analysis-section">
+              <span class="analysis-label">Key Responsibilities:</span>
+              <ul id="jd-responsibilities" class="responsibilities-list"></ul>
+            </div>
+            <div id="missing-skills-section" class="analysis-section missing-skills-box">
+              <span class="analysis-label warning-label">⚠️ Portfolio Gap Addressed:</span>
+              <div id="jd-missing-skills" class="tech-tags-container warning-tags"></div>
+            </div>
+          </div>
+        </div>
+
+        <!-- Project Selection & Scoring Card -->
+        <div id="project-selection-card" class="output-card hud-panel">
+          <div class="panel-corner-br"></div>
+          <div class="panel-header">
+            <div class="panel-icon">📈</div>
+            <div>
+              <h2 class="panel-title">Resume Projects Optimization</h2>
+              <p class="panel-subtitle">Recruiter decision logic & scores</p>
+            </div>
+          </div>
+          <div class="project-selection-content">
+            <div class="scores-visualization">
+              <h3 class="subsection-title">Project Matching Scores</h3>
+              <div id="project-scores-bars" class="scores-bars-container">
+                <!-- Score bars will be generated dynamically -->
+              </div>
+            </div>
+            <div class="selection-status-lists">
+              <div class="selected-list-box">
+                <h3 class="subsection-title select-title">✅ Selected to Deploy</h3>
+                <div id="selected-projects-list" class="projects-detail-list"></div>
+              </div>
+              <div class="replaced-list-box">
+                <h3 class="subsection-title replace-title">❌ Replaced (Weakest Match)</h3>
+                <div id="replaced-project-details" class="replaced-project-box"></div>
+              </div>
+            </div>
+          </div>
+        </div>
+
+        <!-- LaTeX Resume Output -->
+        <div id="latex-card" class="output-card hud-panel">
+          <div class="panel-corner-br"></div>
+          <div class="panel-header">
+            <div class="panel-icon">📄</div>
+            <div>
+              <h2 class="panel-title">Payload: LaTeX Resume</h2>
+              <p class="panel-subtitle">Copy to Overleaf or download</p>
+            </div>
+          </div>
+          <pre id="latex-output" class="latex-output">%% AWAITING MISSION EXECUTION...
+%% Your tailored LaTeX resume will deploy here.</pre>
+          <div class="latex-actions">
+            <button id="btn-copy" class="btn-action" type="button">📋 EXTRACT</button>
+            <button id="btn-download" class="btn-action" type="button">💾 DOWNLOAD .TEX</button>
+          </div>
+        </div>
+
+        <!-- Project Suggestion (New Quest) -->
+        <div id="project-card" class="output-card project-card">
+          <div class="panel-header">
+            <div class="panel-icon">🏆</div>
+            <div>
+              <h2 class="panel-title">New Quest Unlocked</h2>
+              <p class="panel-subtitle">Build this to level up</p>
+            </div>
+          </div>
+          <h3 id="project-title" class="project-title">🚀 Quest Title</h3>
+          <p id="project-desc" class="project-description">Quest details loading...</p>
+          <div id="project-tech" class="project-tech-stack"></div>
+          <div id="project-why" class="project-why">
+            <strong>Quest Reward: </strong> Explanation pending.
+          </div>
+        </div>
+
+      </section>
+    </main>
+  </div>
+
+  <!-- ═══ API Key Modal ═══ -->
+  <div id="modal-overlay" class="modal-overlay">
+    <div class="modal">
+      <h2 class="modal-title">🔑 Access Key Required</h2>
+      <p class="modal-subtitle">
+        Enter your Gemini API key to activate the AI engine. Stored locally — never leaves your machine.
+      </p>
+      <input
+        id="modal-api-key"
+        class="modal-input"
+        type="password"
+        placeholder="AIzaSy..."
+        autocomplete="off"
+        spellcheck="false"
+      >
+      <p id="modal-error" class="modal-error"></p>
+      <div class="modal-actions">
+        <button id="modal-save" class="btn-modal-primary" type="button">▶ Activate System</button>
+      </div>
+      <div class="modal-help">
+        <p>
+          Get a free key at
+          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>
+          → Create API Key → paste above.
+        </p>
+      </div>
+    </div>
+  </div>
+
+  <!-- ═══ Settings Button (Hex) ═══ -->
+  <button id="btn-settings" class="btn-settings" type="button" title="System Settings" aria-label="Settings">⚙️</button>
+
+  <!-- ═══ Toast ═══ -->
+  <div id="toast" class="toast">
+    <span class="toast-icon">✅</span>
+    <span class="toast-text">Mission complete</span>
+  </div>
+
+  <script src="app.js"></script>
+</body>
+</html>
