@@ -243,25 +243,42 @@
     <div class="modal">
       <h2 class="modal-title">🔑 Access Key Required</h2>
       <p class="modal-subtitle">
-        Enter your Gemini API key to activate the AI engine. Stored locally — never leaves your machine.
+        Enter your API keys to activate the AI engines (at least one required). Keys are stored locally — they never leave your machine.
       </p>
-      <input
-        id="modal-api-key"
-        class="modal-input"
-        type="password"
-        placeholder="AIzaSy..."
-        autocomplete="off"
-        spellcheck="false"
-      >
+      
+      <div style="margin-bottom: 1rem;">
+        <label for="modal-api-key" style="color: var(--neon-cyan); font-size: 0.85rem; font-weight: bold; margin-bottom: 0.25rem; display: block;">Google Gemini API Key (Primary)</label>
+        <input
+          id="modal-api-key"
+          class="modal-input"
+          type="password"
+          placeholder="AIzaSy..."
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+
+      <div style="margin-bottom: 1rem;">
+        <label for="modal-groq-key" style="color: var(--neon-magenta); font-size: 0.85rem; font-weight: bold; margin-bottom: 0.25rem; display: block;">Groq API Key (Backup / Fast Inference)</label>
+        <input
+          id="modal-groq-key"
+          class="modal-input"
+          type="password"
+          placeholder="gsk_..."
+          autocomplete="off"
+          spellcheck="false"
+        >
+      </div>
+
       <p id="modal-error" class="modal-error"></p>
       <div class="modal-actions">
         <button id="modal-save" class="btn-modal-primary" type="button">▶ Activate System</button>
       </div>
       <div class="modal-help">
         <p>
-          Get a free key at
-          <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio</a>
-          → Create API Key → paste above.
+          Get free keys at:
+          <br>• <a href="https://aistudio.google.com/app/apikey" target="_blank" rel="noopener">Google AI Studio (Gemini)</a>
+          <br>• <a href="https://console.groq.com/keys" target="_blank" rel="noopener">Groq Console (Llama/OpenAI-compatible)</a>
         </p>
       </div>
     </div>

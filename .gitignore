@@ -3,3 +3,7 @@
 *.xlsx
 *.crdownload
 coderely certificate.png
+
+github-recovery-codes.txt
+*.secret
+.env

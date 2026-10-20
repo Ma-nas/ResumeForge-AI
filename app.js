@@ -7,7 +7,7 @@
 const PROFILE = {
   name: "Manas Mishra",
   email: "manasmishra131005@gmail.com",
-  phone: "+91-XXXXXXXXXX",
+  phone: "+91 6363824224",
   linkedin: "linkedin.com/in/manas-mishra-a05679294",
   github: "github.com/Ma-nas",
   location: "Bengaluru, India",
@@ -164,91 +164,173 @@ function hasApiKey() {
 }
 
 // ─── Gemini API Call with Model Fallback ─────────────────────
-// NOTE (2026-06-30): gemini-2.0-flash, gemini-2.0-flash-lite, and all
-// gemini-1.5-* models were shut down by Google and now 404. Updated to
-// the current live model lineup (gemini-3.5-flash family / 2.5 fallback).
 const GEMINI_MODELS = [
-  'gemini-flash-latest',
   'gemini-2.5-flash',
-  'gemini-2.5-flash-lite',
+  'gemini-2.5-flash-lite'
 ];
 
-async function callGemini(prompt) {
+async function callGemini(prompt, onStatusUpdate) {
   const apiKey = getApiKey();
   if (!apiKey) throw new Error('No API key configured');
 
   let lastError = null;
 
   for (const model of GEMINI_MODELS) {
-    try {
-      // NOTE (2026-06-30): Google is migrating from "standard" API keys
-      // (AIzaSy...) sent as a ?key= query param to "auth keys" (AQ.Ab...)
-      // which must be sent via the x-goog-api-key header instead.
-      // The header works for both key types, so this is the safe default.
-      const response = await fetch(
-        `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
-        {
-          method: 'POST',
-          headers: {
-            'Content-Type': 'application/json',
-            'x-goog-api-key': apiKey,
-          },
-          body: JSON.stringify({
-            contents: [{ parts: [{ text: prompt }] }],
-            generationConfig: {
-              temperature: 0.7,
-              topP: 0.9,
-              maxOutputTokens: 8192,
-              responseMimeType: 'application/json',
+    let retries = 0;
+    const maxRetries = 2;
+    
+    while (retries <= maxRetries) {
+      try {
+        if (onStatusUpdate) {
+          const retryText = retries > 0 ? ` (Retry ${retries})` : '';
+          onStatusUpdate(`Trying ${model}${retryText}...`);
+        }
+        
+        // NOTE (2026-06-30): Google is migrating from "standard" API keys
+        // (AIzaSy...) sent as a ?key= query param to "auth keys" (AQ.Ab...)
+        // which must be sent via the x-goog-api-key header instead.
+        // The header works for both key types, so this is the safe default.
+        const response = await fetch(
+          `https://generativelanguage.googleapis.com/v1beta/models/${model}:generateContent`,
+          {
+            method: 'POST',
+            headers: {
+              'Content-Type': 'application/json',
+              'x-goog-api-key': apiKey,
+            },
+            body: JSON.stringify({
+              contents: [{ parts: [{ text: prompt }] }],
+              generationConfig: {
+                temperature: 0.7,
+                topP: 0.9,
+                maxOutputTokens: 32768,
+                thinkingConfig: { thinkingBudget: 0 }
+              }
+            })
+          }
+        );
+
+        if (!response.ok) {
+          const err = await response.json().catch(() => ({}));
+          const errMsg = err.error?.message || '';
+
+          // Model not found / retired — try next model, don't treat as a key error
+          if (response.status === 404) {
+            lastError = new Error(`Model ${model} not found (may be retired)`);
+            break; // Move to next model
+          }
+
+          // If quota exceeded or rate limited
+          if (response.status === 429 || errMsg.toLowerCase().includes('quota')) {
+            lastError = new Error(`Quota exceeded for ${model}`);
+            if (retries < maxRetries) {
+              retries++;
+              const backoffMs = retries === 1 ? 2000 : 4000;
+              if (onStatusUpdate) onStatusUpdate(`Rate limit on ${model}. Waiting ${backoffMs/1000}s...`);
+              await new Promise(r => setTimeout(r, backoffMs));
+              continue;
             }
-          })
+            break; // Max retries reached, move to next model
+          }
+
+          if (response.status === 401 || response.status === 403) {
+            throw new Error('Invalid or unauthorized API key. Please check your Gemini API key in settings.');
+          }
+          throw new Error(errMsg || `API error: ${response.status}`);
         }
-      );
 
-      if (!response.ok) {
-        const err = await response.json().catch(() => ({}));
-        const errMsg = err.error?.message || '';
+        const data = await response.json();
+        const candidate = data.candidates?.[0];
+        const text = candidate?.content?.parts?.[0]?.text;
+        
+        if (!text) {
+          lastError = new Error(`Empty response from ${model}`);
+          break; // Try next model
+        }
+        if (candidate?.finishReason === 'MAX_TOKENS') {
+          console.warn(`⚠️ ${model} got cut off (MAX_TOKENS) — treating as a failure, trying next model`);
+          lastError = new Error(`${model} response was truncated`);
+          break; // Move to next model
+        }
+        console.log(`✅ Used model: ${model}`);
+        return text;
 
-        // Model not found / retired — try next model, don't treat as a key error
-        if (response.status === 404) {
-          lastError = new Error(`Model ${model} not found (may be retired)`);
+      } catch (err) {
+        if (err.message.includes('Invalid or unauthorized API key')) throw err;
+        lastError = err;
+        console.warn(`⚠️ Model ${model} attempt ${retries + 1} failed:`, err.message);
+        
+        if (retries < maxRetries && !err.message.includes('not found')) {
+          retries++;
+          const backoffMs = retries === 1 ? 2000 : 4000;
+          if (onStatusUpdate) onStatusUpdate(`Error on ${model}. Retrying in ${backoffMs/1000}s...`);
+          await new Promise(r => setTimeout(r, backoffMs));
           continue;
         }
-
-        // If quota exceeded, try next model
-        if (response.status === 429 || errMsg.toLowerCase().includes('quota')) {
-          lastError = new Error(`Quota exceeded for ${model}`);
-          continue;
-        }
-
-        if (response.status === 401 || response.status === 403) {
-          throw new Error('Invalid or unauthorized API key. Please check your Gemini API key in settings.');
-        }
-        throw new Error(errMsg || `API error: ${response.status}`);
+        break; // Break the while loop to move to the next model
       }
-
-      const data = await response.json();
-      const text = data.candidates?.[0]?.content?.parts?.[0]?.text;
-      if (!text) {
-        lastError = new Error(`Empty response from ${model}`);
-        continue;
-      }
-      console.log(`✅ Used model: ${model}`);
-      return text;
-
-    } catch (err) {
-      if (err.message.includes('Invalid or unauthorized API key')) throw err;
-      lastError = err;
-      console.warn(`⚠️ Model ${model} failed:`, err.message);
-      continue;
     }
   }
 
   throw new Error(
-    lastError?.message?.includes('quota') || lastError?.message?.includes('Quota')
+    lastError?.message?.includes('quota') || lastError?.message?.includes('Quota') || lastError?.message?.includes('Rate')
       ? 'All model quotas exceeded. Please wait a few minutes or upgrade your Gemini API plan at ai.google.dev.'
       : (lastError?.message || 'All models failed. Please try again.')
   );
+}
+
+// ─── Groq API Key & Model Management ─────────────────────────
+const GROQ_API_KEY_STORAGE = 'groq_api_key_resume_gen';
+const getGroqApiKey = () => localStorage.getItem(GROQ_API_KEY_STORAGE) || '';
+const setGroqApiKey = (key) => localStorage.setItem(GROQ_API_KEY_STORAGE, key.trim());
+const hasGroqApiKey = () => getGroqApiKey().length > 10;
+
+const GROQ_MODELS = ['llama-3.3-70b-versatile', 'llama-3.1-8b-instant'];
+
+async function callGroq(prompt, onStatusUpdate) {
+  const apiKey = getGroqApiKey();
+  if (!apiKey) throw new Error('No Groq API key configured');
+  let lastError = null;
+
+  for (const model of GROQ_MODELS) {
+    try {
+      if (onStatusUpdate) onStatusUpdate(`Trying Groq: ${model}...`);
+      const response = await fetch('https://api.groq.com/openai/v1/chat/completions', {
+        method: 'POST',
+        headers: { 'Content-Type': 'application/json', 'Authorization': `Bearer ${apiKey}` },
+        body: JSON.stringify({
+          model,
+          messages: [{ role: 'user', content: prompt }],
+          temperature: 0.7,
+          top_p: 0.9,
+          max_tokens: 8192
+        })
+      });
+      if (!response.ok) {
+        const err = await response.json().catch(() => ({}));
+        if (response.status === 401 || response.status === 403) {
+          throw new Error('Invalid Groq API key.');
+        }
+        lastError = new Error(err.error?.message || `Groq error ${response.status}`);
+        continue;
+      }
+      const data = await response.json();
+      const choice = data.choices?.[0];
+      const text = choice?.message?.content;
+      if (!text) { lastError = new Error(`Empty response from ${model}`); continue; }
+      if (choice?.finish_reason === 'length') {
+        console.warn(`⚠️ Groq ${model} got cut off (length) — treating as a failure`);
+        lastError = new Error(`${model} response was truncated`);
+        continue;
+      }
+      console.log(`✅ Used Groq model: ${model}`);
+      return text;
+    } catch (err) {
+      if (err.message.includes('Invalid Groq')) throw err;
+      lastError = err;
+    }
+  }
+  throw new Error(lastError?.message || 'All Groq models failed.');
 }
 
 // ─── Build the System Prompt ─────────────────────────────────
@@ -267,17 +349,17 @@ You MUST follow this 10-stage execution pipeline:
    - Business Impact: 15 points maximum
 3. **Project Selection**: Select the best 2 existing projects based on their scores.
 4. **Project Generation**: Identify the largest technology/domain gap between the candidate's portfolio and the JD requirements. Generate a production-quality, resume-ready project to fill this gap. Replace the weakest scoring existing project with this generated project.
-5. **Project Insertion**: The resume MUST contain EXACTLY three projects: the top 2 selected existing projects, plus the 1 generated project. You MUST insert the generated project directly into the LaTeX resume, and also details of it in the JSON response.
+5. **Project Insertion**: The resume MUST contain EXACTLY three projects: the top 2 selected existing projects, plus the 1 generated project. You MUST insert the generated project directly into the LaTeX resume with 2-3 detailed bullet points describing its technical implementation and impact, and also provide details in the JSON response.
 6. **Skills Filtering & Ordering**: Never invent skills. Only reorder categories and specific skills within the PROFILE so that technologies mentioned in the JD are highlighted first.
 7. **Certification Selection**: Select up to a maximum of 3 certifications from the profile, ranked by relevance to the JD (e.g., NVIDIA/Deep Learning/NLP certs prioritized for AI/ML roles; Figma/Git for design/UI roles).
-8. **Experience Rewriting**: Rewrite experience bullets using the Bullet Formula: [Action Verb] + [Technology used] + [Business Impact] + [Metric if possible]. Never hallucinate company, dates, or titles. Ensure 100% factual accuracy.
-9. **Hyperlinked Contact Header**: Use the 'hyperref' and 'fontawesome5' LaTeX packages. Make all contact fields clickable:
-   - Phone: \\href{tel:+91-XXXXXXXXXX}{\\faPhone\\ +91-XXXXXXXXXX}
-   - Email: \\href{mailto:manasmishra131005@gmail.com}{\\faEnvelope\\ manasmishra131005@gmail.com}
-   - GitHub: \\href{https://github.com/Ma-nas}{\\faGithub\\ github.com/Ma-nas}
-   - LinkedIn: \\href{https://linkedin.com/in/manas-mishra-a05679294}{\\faLinkedin\\ linkedin.com/in/manas-mishra-a05679294}
-   Ensure there are no plain text links.
-10. **ATS Validation**: Ensure the generated LaTeX resume compiles perfectly, contains exactly 1 page, uses the Jake Ryan template, contains exactly 3 projects (including the generated one), has no summary section, and targets an ATS score of > 90.
+8. **Experience & Project Rewriting**: Rewrite experience and existing project bullets using the Bullet Formula: [Action Verb] + [Technology used] + [Business Impact] + [Metric if possible]. Tailor existing bullets to strongly match JD keywords. Never hallucinate company, dates, or titles. Ensure 100% factual accuracy.
+9. **Hyperlinked Contact Header**: Use 'hyperref' and 'fontawesome5'. The VISIBLE TEXT must be short labels, never raw URLs:
+   - Phone: \\href{tel:${PROFILE.phone}}{\\faPhone\\ ${PROFILE.phone}}
+   - Email: \\href{mailto:${PROFILE.email}}{\\faEnvelope\\ ${PROFILE.email}}
+   - GitHub: \\href{https://${PROFILE.github}}{\\faGithub\\ GitHub}
+   - LinkedIn: \\href{https://${PROFILE.linkedin}}{\\faLinkedin\\ LinkedIn}
+   Apply the same rule to every project link — show \\href{URL}{\\faGithub\\ Repo} or \\href{URL}{\\faExternalLinkAlt\\ Live Demo}, NEVER the bare URL text. This applies with no exceptions.
+10. **ATS Validation**: Ensure the generated LaTeX resume compiles perfectly, contains exactly 1 page, uses the Jake Ryan template, contains exactly 3 projects (including the generated one), MUST include a "Professional Summary" section at the top tailored to the JD, and targets an ATS score of > 90. TO ENSURE IT STRICTLY FITS ON 1 PAGE, limit all experience and project sections to a maximum of 3 concise bullet points each.
 
 ═══════════════════════════════════════════════════
 CANDIDATE PROFILE DATA:
@@ -290,9 +372,10 @@ JOB DESCRIPTION:
 ${jd}
 
 ═══════════════════════════════════════════════════
-RESUME FORMAT RULES (JAKE RYAN TEMPLATE):
+RESUME FORMAT RULES (MANDATORY — USE THESE EXACT MACROS):
 ═══════════════════════════════════════════════════
-Ensure standard Jake Ryan LaTeX structure, including packages:
+You MUST use this exact preamble and these exact custom commands. Do NOT invent your own spacing or use plain itemize for section content — use resumeItem/resumeSubheading/resumeProjectHeading for every single entry. This is what makes the layout fit one page.
+
 \\documentclass[letterpaper,11pt]{article}
 \\usepackage{latexsym}
 \\usepackage[empty]{fullpage}
@@ -307,16 +390,58 @@ Ensure standard Jake Ryan LaTeX structure, including packages:
 \\usepackage{tabularx}
 \\usepackage{fontawesome5}
 \\input{glyphtounicode}
-% ... set page margins, headings formatting, subheadings format, etc.
-Include sections: Education, Experience, Projects (exactly 3), Skills, Certifications (max 3).
+\\pagestyle{fancy}
+\\fancyhf{}
+\\fancyfoot{}
+\\renewcommand{\\headrulewidth}{0pt}
+\\renewcommand{\\footrulewidth}{0pt}
+\\addtolength{\\oddsidemargin}{-0.6in}
+\\addtolength{\\evensidemargin}{-0.6in}
+\\addtolength{\\textwidth}{1.2in}
+\\addtolength{\\topmargin}{-.6in}
+\\addtolength{\\textheight}{1.2in}
+\\urlstyle{same}
+\\raggedbottom
+\\raggedright
+\\setlength{\\tabcolsep}{0in}
+\\titleformat{\\section}{\\vspace{-5pt}\\scshape\\raggedright\\large}{}{0em}{}[\\color{black}\\titlerule \\vspace{-6pt}]
+\\newcommand{\\resumeItem}[1]{\\item\\small{#1 \\vspace{-2pt}}}
+\\newcommand{\\resumeSubheading}[4]{\\vspace{-2pt}\\item
+  \\begin{tabular*}{0.98\\textwidth}[t]{l@{\\extracolsep{\\fill}}r}
+    \\textbf{#1} & #2 \\\\ \\textit{\\small#3} & \\textit{\\small #4} \\\\
+  \\end{tabular*}\\vspace{-7pt}}
+\\newcommand{\\resumeProjectHeading}[2]{\\item
+  \\begin{tabular*}{0.98\\textwidth}{l@{\\extracolsep{\\fill}}r}
+    \\small#1 & #2 \\\\
+  \\end{tabular*}\\vspace{-7pt}}
+\\newcommand{\\resumeSubHeadingListStart}{\\begin{itemize}[leftmargin=0.15in, label={}]}
+\\newcommand{\\resumeSubHeadingListEnd}{\\end{itemize}}
+\\newcommand{\\resumeItemListStart}{\\begin{itemize}[leftmargin=0.15in]}
+\\newcommand{\\resumeItemListEnd}{\\end{itemize}\\vspace{-5pt}}
+
+ADDITIONAL SPACE-SAVING RULES:
+- Professional Summary: ONE unbulleted paragraph, max 2 lines. Do NOT use 3 bullet points for the summary — that alone was costing 5+ lines in prior output.
+- Every experience/project bullet must be ONE line if possible, max two. No filler clauses.
+- Use \\resumeProjectHeading for every project title line (never a bare tabularx block).
+- Use \\resumeItem inside \\resumeItemListStart/End for every bullet — never plain \\item.
+- Coursework line: max 6 courses, comma separated, no line break.
+
+Include sections: Professional Summary, Education, Experience, Projects (exactly 3), Skills, Certifications (max 3).
 Ensure exactly 1 page length.
 
-═══════════════════════════════════════════════════
-OUTPUT FORMAT (STRICT JSON):
-═══════════════════════════════════════════════════
-You MUST respond with a single JSON object (and nothing else). No markdown, no backticks, no code fences.
-The response must follow this JSON schema exactly, but with real values matching your analysis:
+CRITICAL INSTRUCTION FOR TOKEN BUDGET: Keep 'ats_feedback' and all 'reason' / 'why' fields in the JSON concise — 1 sentence, max ~25 words each. Do not write long justifications. You must save your token budget for the complete LaTeX output!
 
+CRITICAL INSTRUCTION FOR LATEX: You MUST generate the ENTIRE, COMPLETE LaTeX document from \\documentclass all the way to \\end{document}. Do NOT use abbreviations, placeholders, or comments like "% ... (setup packages)". You must write out every single section, including the full contact header, summary, education, full experience list, all 3 projects, skills, and certifications. If you cut it short, the compiler will fail!
+
+═══════════════════════════════════════════════════
+OUTPUT FORMAT:
+═══════════════════════════════════════════════════
+You MUST respond with exactly two parts:
+1. A JSON object enclosed in a \`\`\`json codeblock containing your analysis.
+2. The complete LaTeX code enclosed in a \`\`\`latex codeblock. Do NOT put the LaTeX code inside the JSON.
+
+Example Response Structure:
+\`\`\`json
 {
   "ats_score": 95,
   "ats_feedback": "Explain why this score was given.",
@@ -335,18 +460,13 @@ The response must follow this JSON schema exactly, but with real values matching
       "generated": false
     },
     {
-      "name": "TourismCo. AI",
-      "score": 90,
-      "reason": "Uses generative AI APIs.",
-      "generated": false
-    },
-    {
       "name": "Automated MLOps Pipeline",
       "score": 100,
       "reason": "Fills the MLOps gap.",
       "generated": true,
       "fills_gap": "MLOps",
-      "description": "A production-grade pipeline.",
+      "description": "A production-grade pipeline solving the MLOps gap.",
+      "bullets": ["Architected a scalable MLOps pipeline using Docker and Kubernetes, reducing deployment time by 40%.", "Implemented automated CI/CD for model retraining."],
       "tech_stack": ["Docker", "Git"],
       "why": "Demonstrates deployment."
     }
@@ -358,72 +478,336 @@ The response must follow this JSON schema exactly, but with real values matching
   },
   "project_scores": {
     "EvalForge": 95,
-    "TourismCo. AI": 90,
-    "Adaptive Proximal Gradient Research": 70,
-    "AI Test Case Generator": 80,
-    "Demand Forecasting System": 60,
     "WanderChat": 45,
     "Automated MLOps Pipeline": 100
   },
   "skills_emphasized": ["Python", "PyTorch"],
-  "certifications_used": ["NVIDIA Deep Learning"],
-  "latex": "%% Compilable LaTeX code here..."
+  "certifications_used": ["NVIDIA Deep Learning"]
 }
+\`\`\`
+\`\`\`latex
+\\documentclass[letterpaper,11pt]{article}
+%% [CRITICAL: DO NOT OUTPUT THIS COMMENT. YOU MUST WRITE OUT ALL REQUIRED PACKAGES AND FULL CONTACT HEADER HERE]
 
-CRITICAL: Every single backslash in the LaTeX code MUST be escaped as a double backslash (\\) so it is a valid JSON string value (e.g., use \\documentclass, \\begin, \\item). All double quotes inside the LaTeX code MUST be escaped as \". Return ONLY the JSON object. Do not wrap it in \`\`\`json \`\`\` blocks.\`\`\``;
+\\section{Professional Summary}
+%% [CRITICAL: DO NOT OUTPUT THIS COMMENT. WRITE A REAL 3-SENTENCE SUMMARY HERE WITHOUT BULLETS]
+
+\\section{Projects}
+  \\resumeSubHeadingListStart
+    \\resumeProjectHeading
+      {\\textbf{Generated Project Name} $|$ \\emph{Tech Stack}}{}
+      \\resumeItemListStart
+        \\resumeItem{Bullet point 1 from your JSON analysis.}
+        \\resumeItem{Bullet point 2 from your JSON analysis.}
+      \\resumeItemListEnd
+% ... other projects ...
+  \\resumeSubHeadingListEnd
+\\end{document}
+\`\`\`
+`;
 }
 
 // ─── Parse Gemini Response ───────────────────────────────────
 function parseGeminiResponse(rawText) {
-  let cleaned = rawText.trim();
-  
-  // Strip markdown code fences if present
-  cleaned = cleaned.replace(/^```(?:json)?\s*/i, '').replace(/\s*```$/i, '');
-  cleaned = cleaned.trim();
+  let jsonStr = '';
+  let latexStr = '';
 
-  let jsonStr = cleaned;
-  const firstBrace = cleaned.indexOf('{');
-  const lastBrace = cleaned.lastIndexOf('}');
-  if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
-    jsonStr = cleaned.substring(firstBrace, lastBrace + 1);
+  const jsonMatch = rawText.match(/```json\s*([\s\S]*?)\s*```/i);
+  if (jsonMatch) {
+    jsonStr = jsonMatch[1];
+  } else {
+    // fallback if no json code block
+    const firstBrace = rawText.indexOf('{');
+    const lastBrace = rawText.lastIndexOf('}');
+    if (firstBrace !== -1 && lastBrace !== -1 && lastBrace > firstBrace) {
+      jsonStr = rawText.substring(firstBrace, lastBrace + 1);
+    }
   }
 
+  const latexMatch = rawText.match(/```(?:latex|tex)\s*([\s\S]*?)\s*```/i);
+  if (latexMatch) {
+    latexStr = latexMatch[1];
+  } else {
+    // fallback if no latex code block
+    const docClassIdx = rawText.indexOf('\\documentclass');
+    if (docClassIdx !== -1) {
+      latexStr = rawText.substring(docClassIdx);
+      const endDocIdx = latexStr.indexOf('\\end{document}');
+      if (endDocIdx !== -1) {
+         latexStr = latexStr.substring(0, endDocIdx + 14);
+      }
+    }
+  }
+
+  let result;
   try {
-    return JSON.parse(jsonStr);
+    result = JSON.parse(jsonStr);
   } catch (e) {
-    // If standard parsing fails (e.g. unescaped backslashes in LaTeX), attempt to fix it
+    // Attempt to fix common JSON issues
+    const fixedStr = jsonStr.replace(/\\([^"\\/bfnrtu])/g, '\\\\$1').replace(/\n/g, '\\n');
     try {
-      // Escape any backslash that isn't already escaping a valid JSON character
-      const fixedStr = jsonStr.replace(/\\([^"\\/bfnrtu])/g, '\\\\$1');
-      return JSON.parse(fixedStr);
+      result = JSON.parse(fixedStr);
     } catch (e2) {
       console.error("JSON Parsing failed after cleaning. Error:", e);
-      console.error("Raw response was:", rawText);
       throw new Error('Failed to parse AI response. Please try again.');
     }
   }
+
+  if (latexStr) {
+    result.latex = latexStr.trim();
+    if (!result.latex.includes('\\end{document}')) {
+      const beginCount = (result.latex.match(/\\begin\{itemize\}|\\resumeItemListStart|\\resumeSubHeadingListStart/g) || []).length;
+      const endCount = (result.latex.match(/\\end\{itemize\}|\\resumeItemListEnd|\\resumeSubHeadingListEnd/g) || []).length;
+      for (let i = 0; i < beginCount - endCount; i++) {
+        result.latex += '\n\\end{itemize}';
+      }
+      result.latex += '\n\\end{document}';
+    }
+  } else if (!result.latex) {
+    throw new Error('No LaTeX code found in response.');
+  }
+
+  return result;
+}
+
+// ─── Offline Fallback Generator ──────────────────────────────
+async function generateOfflineResume(jd) {
+  const lowerJd = jd.toLowerCase();
+  const techKeywords = ['python', 'java', 'react', 'node', 'sql', 'machine learning', 'deep learning', 'nlp', 'aws', 'docker', 'kubernetes', 'tensorflow', 'pytorch', 'javascript', 'typescript', 'mongodb', 'fastapi', 'flask'];
+  
+  const foundTech = techKeywords.filter(k => lowerJd.includes(k));
+  const reqTech = foundTech.slice(0, 5).map(t => t.charAt(0).toUpperCase() + t.slice(1));
+  
+  // Select top 2 projects
+  const selectedProjects = PROFILE.projects.slice(0, 2).map((p, i) => ({
+    name: p.name,
+    score: 85 - i * 5,
+    reason: "Selected as strong match based on profile.",
+    generated: false
+  }));
+
+  // Generate 1 project based on heuristic
+  let generatedProject = {
+    name: "AI Microservices Pipeline",
+    score: 90,
+    reason: "Generated to fill gap in scalable AI deployments.",
+    generated: true,
+    description: "End-to-end scalable ML pipeline for automated inference and model retraining.",
+    tech_stack: ["Python", "Docker", "FastAPI", "Kubernetes"],
+    why: "The job description strongly hints at deploying and scaling AI models."
+  };
+
+  if (lowerJd.includes('data') || lowerJd.includes('sql')) {
+    generatedProject = {
+      name: "Automated Data Processing Engine",
+      score: 92,
+      reason: "Generated to fill data engineering gap.",
+      generated: true,
+      description: "Distributed data processing engine handling 1M+ records/day.",
+      tech_stack: ["Python", "SQL", "Pandas", "Apache Airflow"],
+      why: "The job focuses heavily on data manipulation and ETL."
+    };
+  } else if (lowerJd.includes('react') || lowerJd.includes('web') || lowerJd.includes('javascript')) {
+    generatedProject = {
+      name: "Full-Stack AI Dashboard",
+      score: 95,
+      reason: "Generated to fill full-stack development gap.",
+      generated: true,
+      description: "Real-time AI monitoring dashboard with interactive visualizations.",
+      tech_stack: ["React", "TypeScript", "Node.js", "Tailwind CSS"],
+      why: "The job emphasizes full-stack and front-end technologies."
+    };
+  }
+
+  selectedProjects.push(generatedProject);
+
+  const replacedProject = {
+    name: PROFILE.projects[PROFILE.projects.length - 1].name,
+    score: 50,
+    reason: "Weakest match for the targeted job role."
+  };
+
+  const projectScores = {};
+  PROFILE.projects.forEach(p => {
+    projectScores[p.name] = 60 + Math.floor(Math.random() * 20);
+  });
+  selectedProjects.forEach(p => {
+    projectScores[p.name] = p.score;
+  });
+
+  const atsScore = Math.min(95, 60 + (foundTech.length * 5));
+
+  const latex = `
+\\documentclass[letterpaper,11pt]{article}
+
+\\usepackage{latexsym}
+\\usepackage[empty]{fullpage}
+\\usepackage{titlesec}
+\\usepackage{marvosym}
+\\usepackage[usenames,dvipsnames]{color}
+\\usepackage{verbatim}
+\\usepackage{enumitem}
+\\usepackage[hidelinks]{hyperref}
+\\usepackage{fancyhdr}
+\\usepackage[english]{babel}
+\\usepackage{tabularx}
+\\usepackage{fontawesome5}
+
+\\pagestyle{fancy}
+\\fancyhf{}
+\\renewcommand{\\headrulewidth}{0pt}
+\\renewcommand{\\footrulewidth}{0pt}
+\\addtolength{\\oddsidemargin}{-0.5in}
+\\addtolength{\\evensidemargin}{-0.5in}
+\\addtolength{\\textwidth}{1in}
+\\addtolength{\\topmargin}{-.5in}
+\\addtolength{\\textheight}{1.0in}
+\\urlstyle{same}
+
+\\raggedbottom
+\\raggedright
+\\setlength{\\tabcolsep}{0in}
+
+\\titleformat{\\section}{\\vspace{-4pt}\\scshape\\raggedright\\large}{}{0em}{}[\\color{black}\\titlerule \\vspace{-5pt}]
+
+\\begin{document}
+
+%----------HEADING----------
+\\begin{center}
+    \\textbf{\\Huge \\scshape ${PROFILE.name}} \\\\ \\vspace{1pt}
+    \\small
+    \\faIcon{phone} ${PROFILE.phone} $|$
+    \\href{mailto:${PROFILE.email}}{\\faIcon{envelope} \\underline{${PROFILE.email}}} $|$
+    \\href{https://${PROFILE.linkedin}}{\\faIcon{linkedin} \\underline{${PROFILE.linkedin}}} $|$
+    \\href{https://${PROFILE.github}}{\\faIcon{github} \\underline{${PROFILE.github}}}
+\\end{center}
+
+%-----------EDUCATION-----------
+\\section{Education}
+  \\begin{itemize}[leftmargin=0.15in, label={}]
+    \\item
+      \\begin{tabularx}{\\textwidth}{X r}
+        \\textbf{${PROFILE.education.institution}} & ${PROFILE.education.location} \\\\
+        \\textit{${PROFILE.education.degree}} & ${PROFILE.education.period} \\\\
+      \\end{tabularx}
+  \\end{itemize}
+
+%-----------EXPERIENCE-----------
+\\section{Experience}
+  \\begin{itemize}[leftmargin=0.15in, label={}]
+    ${PROFILE.experience.map(exp => `
+    \\item
+      \\begin{tabularx}{\\textwidth}{X r}
+        \\textbf{${exp.title}} & ${exp.period} \\\\
+        \\textit{${exp.company}} & \\\\
+      \\end{tabularx}
+      \\vspace{-2pt}
+      \\begin{itemize}
+        ${exp.bullets.map(b => `\\item ${b}`).join('\\n        ')}
+      \\end{itemize}
+    `).join('')}
+  \\end{itemize}
+
+%-----------PROJECTS-----------
+\\section{Projects}
+  \\begin{itemize}[leftmargin=0.15in, label={}]
+    ${selectedProjects.map(p => {
+      if (p.generated) {
+        return `
+    \\item
+      \\begin{tabularx}{\\textwidth}{X r}
+        \\textbf{${p.name}} $|$ \\emph{${p.tech_stack.join(', ')}} & \\\\
+      \\end{tabularx}
+      \\vspace{-2pt}
+      \\begin{itemize}
+        \\item ${p.description}
+      \\end{itemize}
+        `;
+      }
+      const orig = PROFILE.projects.find(x => x.name === p.name);
+      if (!orig) return '';
+      return `
+    \\item
+      \\begin{tabularx}{\\textwidth}{X r}
+        \\textbf{${orig.name}} $|$ \\emph{${orig.tech.join(', ')}} & \\\\
+      \\end{tabularx}
+      \\vspace{-2pt}
+      \\begin{itemize}
+        ${orig.bullets.map(b => `\\item ${b}`).join('\\n        ')}
+      \\end{itemize}
+      `;
+    }).join('')}
+  \\end{itemize}
+
+%-----------SKILLS-----------
+\\section{Technical Skills}
+ \\begin{itemize}[leftmargin=0.15in, label={}]
+    \\small{\\item{
+     ${Object.entries(PROFILE.skills).map(([cat, skills]) => `\\textbf{${cat}}{: ${skills.join(', ')}}`).join(' \\\\ ')}
+    }}
+ \\end{itemize}
+ 
+\\end{document}
+`.trim();
+
+  await new Promise(r => setTimeout(r, 1500));
+
+  return {
+    _offline: true,
+    ats_score: atsScore,
+    ats_feedback: "Locally generated fallback match analysis.",
+    jd_analysis: {
+      target_role: "Software / AI Engineer",
+      required_technologies: reqTech,
+      preferred_technologies: ["Git", "Linux"],
+      key_responsibilities: ["Develop and maintain scalable software applications", "Collaborate with cross-functional teams"],
+      missing_skills: []
+    },
+    selected_projects: selectedProjects,
+    replaced_project: replacedProject,
+    project_scores: projectScores,
+    skills_emphasized: reqTech,
+    certifications_used: PROFILE.certifications.slice(0, 3).map(c => c.name),
+    latex: latex
+  };
 }
 
 // ─── Main Generate Function ──────────────────────────────────
-async function generateResume(jd) {
+async function generateResume(jd, onStatusUpdate) {
   if (!jd || jd.trim().length < 50) {
     throw new Error('Please paste a complete Job Description (at least 50 characters).');
   }
-
-  if (!hasApiKey()) {
+  if (!hasApiKey() && !hasGroqApiKey()) {
     throw new Error('API_KEY_MISSING');
   }
 
   const prompt = buildResumePrompt(jd);
-  const rawResponse = await callGemini(prompt);
-  const result = parseGeminiResponse(rawResponse);
+  let rawResponse = null;
 
-  // Validate result structure
-  if (!result.latex || !result.selected_projects || !result.jd_analysis || !result.project_scores) {
-    throw new Error('Incomplete response from AI. Please try again.');
+  if (hasApiKey()) {
+    try { rawResponse = await callGemini(prompt, onStatusUpdate); }
+    catch (err) { console.warn('Gemini failed:', err.message); }
   }
 
-  return result;
+  if (!rawResponse && hasGroqApiKey()) {
+    try {
+      if (onStatusUpdate) onStatusUpdate('Gemini unavailable — switching to Groq...');
+      rawResponse = await callGroq(prompt, onStatusUpdate);
+    } catch (err) { console.warn('Groq failed:', err.message); }
+  }
+
+  if (!rawResponse) return await generateOfflineResume(jd);
+
+  try {
+    const result = parseGeminiResponse(rawResponse);
+    if (!result.latex || !result.selected_projects || !result.jd_analysis || !result.project_scores) {
+      return await generateOfflineResume(jd);
+    }
+    return result;
+  } catch (err) {
+    console.warn('Parsing failed, using offline generator:', err.message);
+    return await generateOfflineResume(jd);
+  }
 }
 
 // ─── UI Controller ───────────────────────────────────────────
@@ -451,6 +835,7 @@ document.addEventListener('DOMContentLoaded', () => {
   const settingsBtn = document.getElementById('btn-settings');
   const modalOverlay = document.getElementById('modal-overlay');
   const modalInput = document.getElementById('modal-api-key');
+  const modalGroqInput = document.getElementById('modal-groq-key');
   const modalError = document.getElementById('modal-error');
   const modalSaveBtn = document.getElementById('modal-save');
   const toast = document.getElementById('toast');
@@ -478,7 +863,7 @@ document.addEventListener('DOMContentLoaded', () => {
   });
 
   // ── Check API Key on Load ──
-  if (!hasApiKey()) {
+  if (!hasApiKey() && !hasGroqApiKey()) {
     showModal();
   }
 
@@ -486,6 +871,7 @@ document.addEventListener('DOMContentLoaded', () => {
   function showModal() {
     modalOverlay.classList.add('active');
     modalInput.value = getApiKey();
+    modalGroqInput.value = getGroqApiKey();
     modalError.classList.remove('visible');
     setTimeout(() => modalInput.focus(), 300);
   }
@@ -497,25 +883,33 @@ document.addEventListener('DOMContentLoaded', () => {
   settingsBtn.addEventListener('click', showModal);
 
   modalOverlay.addEventListener('click', (e) => {
-    if (e.target === modalOverlay && hasApiKey()) {
+    if (e.target === modalOverlay && (hasApiKey() || hasGroqApiKey())) {
       hideModal();
     }
   });
 
   modalSaveBtn.addEventListener('click', () => {
-    const key = modalInput.value.trim();
-    if (!key || key.length < 10) {
-      modalError.textContent = 'Please enter a valid Gemini API key.';
+    const geminiKey = modalInput.value.trim();
+    const groqKey = modalGroqInput.value.trim();
+    
+    if ((!geminiKey || geminiKey.length < 10) && (!groqKey || groqKey.length < 10)) {
+      modalError.textContent = 'Please enter at least one valid API key (Gemini or Groq).';
       modalError.classList.add('visible');
       return;
     }
-    setApiKey(key);
+    
+    if (geminiKey) setApiKey(geminiKey);
+    if (groqKey) setGroqApiKey(groqKey);
+    
     modalError.classList.remove('visible');
     hideModal();
-    showToast('✅', 'API key saved successfully');
+    showToast('✅', 'API keys saved successfully');
   });
 
   modalInput.addEventListener('keydown', (e) => {
+    if (e.key === 'Enter') modalSaveBtn.click();
+  });
+  modalGroqInput.addEventListener('keydown', (e) => {
     if (e.key === 'Enter') modalSaveBtn.click();
   });
 
@@ -528,7 +922,7 @@ document.addEventListener('DOMContentLoaded', () => {
       return;
     }
 
-    if (!hasApiKey()) {
+    if (!hasApiKey() && !hasGroqApiKey()) {
       showModal();
       return;
     }
@@ -537,6 +931,9 @@ document.addEventListener('DOMContentLoaded', () => {
     generateBtn.classList.add('loading');
     generateBtn.disabled = true;
     emptyState.style.display = 'none';
+    
+    const btnText = generateBtn.querySelector('.btn-text');
+    const originalBtnText = btnText ? btnText.textContent : 'Execute Mission';
 
     // Show shimmer loading
     atsCard.classList.remove('visible');
@@ -546,7 +943,9 @@ document.addEventListener('DOMContentLoaded', () => {
     projectCard.classList.remove('visible');
 
     try {
-      const result = await generateResume(jd);
+      const result = await generateResume(jd, (status) => {
+        if (btnText) btnText.textContent = status;
+      });
 
       // Update ATS Score
       const score = Math.min(100, Math.max(0, result.ats_score || 75));
@@ -644,7 +1043,11 @@ document.addEventListener('DOMContentLoaded', () => {
       setTimeout(() => latexCard.classList.add('visible'), 400);
       setTimeout(() => projectCard.classList.add('visible'), 500);
 
-      showToast('🎉', 'Resume generated successfully!');
+      if (result._offline) {
+        showToast('📡', 'Generated locally via Offline Fallback');
+      } else {
+        showToast('🎉', 'Resume generated successfully!');
+      }
 
     } catch (err) {
       if (err.message === 'API_KEY_MISSING') {
@@ -656,6 +1059,7 @@ document.addEventListener('DOMContentLoaded', () => {
     } finally {
       generateBtn.classList.remove('loading');
       generateBtn.disabled = false;
+      if (btnText) btnText.textContent = originalBtnText;
     }
   });
 
